@@ -11,7 +11,8 @@ from torchvision import transforms
 from config import data_config
 from utils.helpers import get_model, draw_bbox_gaze
 
-import uniface
+# switching to mediapipe for face detection
+import mediapipe as mp
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -64,7 +65,8 @@ def main(params):
 
     idx_tensor = torch.arange(params.bins, device=device, dtype=torch.float32)
 
-    face_detector = uniface.RetinaFace()  # third-party face detection library
+    # face detection provided by the mediapipe open-source project
+    face_detector = mp.solutions.face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
 
     try:
         gaze_detector = get_model(params.model, params.bins, inference_mode=True)
@@ -100,36 +102,51 @@ def main(params):
                 logging.info("Failed to obtain frame or EOF")
                 break
 
-            bboxes, keypoints = face_detector.detect(frame)
-            for bbox, keypoint in zip(bboxes, keypoints):
-                x_min, y_min, x_max, y_max = map(int, bbox[:4])
+            # detect face with mediapipe face detector
+            results = face_detector.process(frame)
 
-                image = frame[y_min:y_max, x_min:x_max]
-                image = pre_process(image)
-                image = image.to(device)
+            # get frame height and width for calculating pixel bbox coordinates from relative bbox
+            frame_height, frame_width, _ = frame.shape
 
-                pitch, yaw = gaze_detector(image)
+            if results.detections:
+                for detection in results.detections:
+                    rel_bbox = detection.location_data.relative_bounding_box
 
-                pitch_predicted, yaw_predicted = F.softmax(pitch, dim=1), F.softmax(yaw, dim=1)
+                    # determine bbox pixel min and max from relative bbox
+                    x_min = int(rel_bbox.xmin*frame_width)
+                    y_min = int(rel_bbox.ymin*frame_height)
 
-                # Mapping from binned (0 to 90) to angles (-180 to 180) or (0 to 28) to angles (-42, 42)
-                pitch_predicted = torch.sum(pitch_predicted * idx_tensor, dim=1) * params.binwidth - params.angle
-                yaw_predicted = torch.sum(yaw_predicted * idx_tensor, dim=1) * params.binwidth - params.angle
+                    x_max = int((rel_bbox.xmin+rel_bbox.width)*frame_width)
+                    y_max = int((rel_bbox.ymin+rel_bbox.height)*frame_height)
 
-                # Degrees to Radians
-                pitch_predicted = np.radians(pitch_predicted.cpu())
-                yaw_predicted = np.radians(yaw_predicted.cpu())
+                    bbox_array = np.array([x_min, y_min, x_max, y_max])
 
-                # draw box and gaze direction
-                draw_bbox_gaze(frame, bbox, pitch_predicted, yaw_predicted)
+                    image = frame[y_min:y_max, x_min:x_max]
+                    image = pre_process(image)
+                    image = image.to(device)
 
-            if params.output:
-                out.write(frame)
+                    pitch, yaw = gaze_detector(image)
 
-            if params.view:
-                cv2.imshow('Demo', frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+                    pitch_predicted, yaw_predicted = F.softmax(pitch, dim=1), F.softmax(yaw, dim=1)
+
+                    # Mapping from binned (0 to 90) to angles (-180 to 180) or (0 to 28) to angles (-42, 42)
+                    pitch_predicted = torch.sum(pitch_predicted * idx_tensor, dim=1) * params.binwidth - params.angle
+                    yaw_predicted = torch.sum(yaw_predicted * idx_tensor, dim=1) * params.binwidth - params.angle
+
+                    # Degrees to Radians
+                    pitch_predicted = np.radians(pitch_predicted.cpu())
+                    yaw_predicted = np.radians(yaw_predicted.cpu())
+
+                    # draw box and gaze direction
+                    draw_bbox_gaze(frame, bbox_array, pitch_predicted, yaw_predicted)
+
+                if params.output:
+                    out.write(frame)
+
+                if params.view:
+                    cv2.imshow('Demo', frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
 
     cap.release()
     if params.output:
