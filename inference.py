@@ -31,7 +31,7 @@ def parse_args():
         default="resnet34.pt",
         help="Path to gaze esimation model weights"
     )
-    parser.add_argument("--view", action="store_true", default=True, help="Display the inference results")
+    parser.add_argument("--view", action="store_true", help="Display the inference results")
     parser.add_argument("--source", type=str, default="assets/in_video.mp4",
                         help="Path to source video file or camera index")
     parser.add_argument("--output", type=str, default="output.mp4", help="Path to save output file")
@@ -160,6 +160,11 @@ def main(params):
                     bbox_array = np.array([x_min, y_min, x_max, y_max])
 
                     image = frame[y_min:y_max, x_min:x_max]
+
+                    if not image.any():
+                        print("Invalid frame! Skipping...")
+                        break
+
                     image = pre_process(image)
                     image = image.to(device)
 
