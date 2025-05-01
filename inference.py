@@ -36,7 +36,9 @@ def parse_args():
                         help="Path to source video file or camera index")
     parser.add_argument("--output", type=str, default="output.mp4", help="Path to save output file")
     parser.add_argument("--dataset", type=str, default="gaze360", help="Dataset name to get dataset related configs")
-    parser.add_argument("--plot", action="store_true")
+    parser.add_argument("--plot", action="store_true", help="Plot 3D Gaze Vector and Screen Plane")
+    parser.add_argument("--device", type=str, help="Set Pytorch device (cpu, cuda, mps)")
+    parser.add_argument("--benchmark", action="store_true", help="Record average number of estimations-per-second over 5 second period")
     args = parser.parse_args()
 
     # Override default values based on selected dataset
@@ -85,7 +87,14 @@ def calculate_gaze(pitch, yaw):
 
 
 def main(params):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Allow manual selection of device
+    if params.device:
+        device = torch.device(params.device)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    logging.info("Using device: %s", str(device))
 
     idx_tensor = torch.arange(params.bins, device=device, dtype=torch.float32)
 
@@ -212,8 +221,14 @@ def main(params):
                         ax.scatter(2, gaze_point[0]*-1, gaze_point[1])
 
                     # 1 second time for estimations per second
-                    if (time.time() - start_time) > 1:
-                        print('Gaze estimations per second: %d\r'%gaze_count, end="")
+                    if not params.benchmark and (time.time() - start_time) > 1:
+                        print('Gaze estimations-per-second: %d\r'%gaze_count, end="")
+                        gaze_count = 0
+                        start_time = time.time()
+
+                    # Optional 5 second timer for benchmark
+                    if params.benchmark and (time.time() - start_time) > 5:
+                        print('Average estimations-per-second over 5 second period:', gaze_count/5)
                         gaze_count = 0
                         start_time = time.time()
 
